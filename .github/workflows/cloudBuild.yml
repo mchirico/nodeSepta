@@ -1,0 +1,92 @@
+name: Cloud Build
+
+on:
+  push:
+    branches:
+      - master
+      - a
+      - n
+      - f
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [12.x]
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v1
+      with:
+        node-version: ${{ matrix.node-version }}
+
+    # Setup gcloud CLI
+    - uses: mchirico/gcp-actions@v1
+      with:
+        version: 'latest'
+        service_account_key: ${{ secrets.OWNER }}
+
+    # Configure docker to use the gcloud command-line tool as a credential helper
+    - run: |
+        # Set up docker to authenticate
+        # via gcloud command-line tool.
+        gcloud auth configure-docker
+        gcloud components update --quiet
+
+
+    # Node Make
+    - run: |
+        echo "Node Project Make"
+        cd node
+        make
+
+
+    # Node Coverage
+    - run: |
+        echo "Node Project coverage"
+        cd node
+        npm install
+        npm run coverage
+      env:
+        CI: true
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+
+    # Run Docker Image
+    - name: Run Docker Image
+      run: |
+       cd node
+       make
+       make run
+       sleep 7
+       docker ps -a
+       # make logs
+       # curl localhost:3000|grep 'lat'
+
+
+    # Cloud
+    - name: Gcloud Build
+      run: |
+        gcloud config set gcloudignore/enabled false --project septapig
+        # Must be in directory with Dockerfile
+        cd node
+        gcloud builds submit --tag gcr.io/septapig/septacloud --project septapig --timeout 35m23s
+        gcloud run deploy septacloud --image gcr.io/septapig/septacloud \
+              --platform managed --allow-unauthenticated --project septapig \
+              --region us-east1 --port 3000 --max-instances 3  --memory 128Mi
+
+
+    # BigQuery
+    - name: Working with BigQuery
+      run: |
+       txt="Cloud build... septa.cwxstat.com"
+       bq query --nouse_legacy_sql 'CREATE TABLE IF NOT EXISTS  `septapig.github.log` (msg string, timeEnter timestamp);'
+       bq query --nouse_legacy_sql  --parameter=MSG:STRING:"${txt}"  'insert into `septapig.github.log` (msg,timeEnter) values (@MSG,CURRENT_TIMESTAMP())'
+
+
+
+
